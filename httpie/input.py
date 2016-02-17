@@ -328,6 +328,43 @@ class Parser(ArgumentParser):
             self.args.files = items.files
             self.args.params = items.params
 
+        if self.args.files:
+            # input from a pipline for a multipartform
+            # ` cmd | http -f POST url f@-`
+            file_fields = list(self.args.files.keys())
+            file_values = list(self.args.files.values())
+            stdin_to_file = False
+            for key, values in zip(file_fields, file_values):
+                if isinstance(values, list):
+                    for value in values:
+                        if value[0] != '-':
+                            continue
+                        if self.args.ignore_stdin or self.env.stdin_isatty:
+                            self.error(
+                                'you need stdin when http -f post f@-'
+                            )
+
+                        index = values.index(value)
+                        values.remove(value)
+                        value = ('-', BytesIO(self.env.stdin.read()))
+                        values.insert(index, value)
+                        stdin_to_file = True
+
+                if isinstance(values, tuple):
+                    if values[0] == '-':
+                        if self.args.ignore_stdin or self.env.stdin_isatty:
+                            self.error(
+                                'you need stdin when http -f post f@-'
+                            )
+
+                        del self.args.files[key]
+                        values = ('-', BytesIO(self.env.stdin.read()))
+                        self.args.files[key] = values
+                        stdin_to_file = True
+            # stdin already turn to a file
+            if stdin_to_file:
+                self.args.ignore_stdin = True
+
         if self.args.files and not self.args.form:
             # `http url @/path/to/file`
             file_fields = list(self.args.files.keys())
@@ -631,12 +668,15 @@ def parse_items(items,
         elif item.sep == SEP_QUERY:
             target = params
         elif item.sep == SEP_FILES:
-            try:
-                with open(os.path.expanduser(value), 'rb') as f:
-                    value = (os.path.basename(value),
-                             BytesIO(f.read()))
-            except IOError as e:
-                raise ParseError('"%s": %s' % (item.orig, e))
+            if value != '-':
+                try:
+                    with open(os.path.expanduser(value), 'rb') as f:
+                        value = (os.path.basename(value),
+                                 BytesIO(f.read()))
+                except IOError as e:
+                    raise ParseError('"%s": %s' % (item.orig, e))
+            else:
+                value = (value, None)
             target = files
 
         elif item.sep in SEP_GROUP_DATA_ITEMS:
