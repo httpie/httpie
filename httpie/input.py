@@ -18,7 +18,7 @@ from argparse import ArgumentParser, ArgumentTypeError, ArgumentError
 from httpie.plugins import plugin_manager
 from requests.structures import CaseInsensitiveDict
 
-from httpie.compat import urlsplit, str, is_pypy, is_py27
+from httpie.compat import bytes, urlsplit, str, is_pypy, is_py27
 from httpie.sessions import VALID_SESSION_NAME_PATTERN
 from httpie.utils import load_json_preserve_order
 
@@ -146,6 +146,7 @@ class HTTPieArgumentParser(ArgumentParser):
         self._apply_no_options(no_options)
         self._validate_download_options()
         self._setup_standard_streams()
+        self._process_follow_rules()
         self._process_output_options()
         self._process_pretty_options()
         self._guess_method()
@@ -385,6 +386,22 @@ class HTTPieArgumentParser(ArgumentParser):
                 if content_type:
                     self.args.headers['Content-Type'] = content_type
 
+    def _process_follow_rules(self):
+        rules = self.args.follow_rule or []
+        if self.args.post301:
+            rules.append(FollowRule('301:POST'))
+        if self.args.post302:
+            rules.append(FollowRule('302:POST'))
+        if self.args.post303:
+            rules.append(FollowRule('303:POST'))
+        if rules:
+            self.args.follow = True
+        rule_dict = self.args.follow_rule_dict = {}
+        for r in rules:
+            if r.code in rule_dict:
+                self.error('--follow-rule for %s specified more than once' % r.code)
+            rule_dict[r.code] = r
+
     def _process_output_options(self):
         """Apply defaults to output options, or validate the provided ones.
 
@@ -610,6 +627,28 @@ class AuthCredentialsArgType(KeyValueArgType):
 
 
 parse_auth = AuthCredentialsArgType(SEP_CREDENTIALS)
+
+FOLLOW_RULE_RE = re.compile(r'^(\d+):([a-zA-Z]+)(:nodata|:samecookies)*$', re.IGNORECASE)
+
+
+class FollowRule(object):
+    """A single follow-rule parsed from CLI"""
+
+    def __init__(self, arg):
+        match = FOLLOW_RULE_RE.match(arg)
+        if not match:
+            raise ArgumentTypeError("'%s' is not a valid value" % arg)
+        opt = match.group(3).lower().split(':') if match.group(3) else []
+        self.code = int(match.group(1))  # we deliberately allow any integer here, even values that are not proper http!
+        self.method = bytes(match.group(2)) if is_py27 else match.group(2)
+        self.nodata = 'nodata' in opt
+        self.samecookies = 'samecookies' in opt
+
+    def __eq__(self, other):
+        return self.__dict__ == other.__dict__
+
+    def __repr__(self):
+        return repr(self.__dict__)
 
 
 class RequestItemsDict(OrderedDict):
