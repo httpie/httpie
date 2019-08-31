@@ -258,7 +258,7 @@ class HTTPieArgumentParser(argparse.ArgumentParser):
                 self.args.auth_type = default_auth_plugin.auth_type
             plugin = plugin_manager.get_auth_plugin(self.args.auth_type)()
 
-            if plugin.auth_require and self.args.auth is None:
+            if plugin.auth_require and self.args.auth is None and self.args.auth_type != 'disabled':
                 self.error('--auth required')
 
             plugin.raw_auth = self.args.auth
