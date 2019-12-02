@@ -1,8 +1,11 @@
 import argparse
+import os
 import platform
+import site
 import sys
 from typing import Callable, List, Union
 
+from pkg_resources import working_set
 import requests
 from pygments import __version__ as pygments_version
 from requests import __version__ as requests_version
@@ -32,7 +35,24 @@ def main(
     """
     args = decode_raw_args(args, env.stdin_encoding)
     program_name, *args = args
-    plugin_manager.load_installed_plugins()
+
+    sys_path_length = len(sys.path)
+
+    for sitedir in env.config.extra_site_dirs:
+        parts = sitedir.split(os.sep)
+        if parts[0].startswith('~'):
+            parts[0] = os.path.expanduser(parts[0])
+        site.addsitedir(os.sep.join(parts))
+
+    for new_path in sys.path[sys_path_length:]:
+        working_set.add_entry(new_path)
+
+    include_debug_info = '--debug' in args
+
+    if include_debug_info:
+        print_debug_info(env)
+
+    plugin_manager.load_installed_plugins(env.stderr if include_debug_info else None)
 
     def log_error(msg, level='error'):
         assert level in ['error', 'warning']
@@ -46,13 +66,10 @@ def main(
     if custom_log_error:
         log_error = custom_log_error
 
-    include_debug_info = '--debug' in args
     include_traceback = include_debug_info or '--traceback' in args
 
-    if include_debug_info:
-        print_debug_info(env)
-        if args == ['--debug']:
-            return ExitStatus.SUCCESS
+    if args == ['--debug']:
+        return ExitStatus.SUCCESS
 
     exit_status = ExitStatus.SUCCESS
 
@@ -204,6 +221,10 @@ def print_debug_info(env: Environment):
     ])
     env.stderr.write('\n\n')
     env.stderr.write(repr(env))
+    env.stderr.write('\n')
+    env.stderr.write('Looking for plugins in these directories:\n')
+    for p in sys.path:
+        env.stderr.write('  %s\n' % p)
     env.stderr.write('\n')
 
 

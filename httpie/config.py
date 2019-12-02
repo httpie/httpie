@@ -83,7 +83,8 @@ class Config(BaseConfigDict):
     helpurl = 'https://httpie.org/doc#config'
     about = 'HTTPie configuration file'
     DEFAULTS = {
-        'default_options': []
+        'default_options': [],
+        'extra_site_dirs': [],
     }
 
     def __init__(self, directory: Union[str, Path] = DEFAULT_CONFIG_DIR):
@@ -97,3 +98,7 @@ class Config(BaseConfigDict):
     @property
     def default_options(self) -> list:
         return self['default_options']
+
+    @property
+    def extra_site_dirs(self) -> list:
+        return self['extra_site_dirs']
