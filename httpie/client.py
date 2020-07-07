@@ -5,7 +5,7 @@ import sys
 import zlib
 from contextlib import contextmanager
 from pathlib import Path
-from typing import Iterable, Union
+from typing import Iterable, Union, Tuple
 from urllib.parse import urlparse, urlunparse
 
 import requests
@@ -15,7 +15,7 @@ import urllib3
 from httpie import __version__
 from httpie.cli.dicts import RequestHeadersDict
 from httpie.plugins.registry import plugin_manager
-from httpie.sessions import get_httpie_session
+from httpie.sessions import get_httpie_session, Session
 from httpie.ssl import AVAILABLE_SSL_VERSION_ARG_MAPPING, HTTPieHTTPSAdapter
 from httpie.utils import get_expired_cookies, repr_dict
 
@@ -27,52 +27,101 @@ JSON_ACCEPT = f'{JSON_CONTENT_TYPE}, */*;q=0.5'
 DEFAULT_UA = f'HTTPie/{__version__}'
 
 
-def collect_messages(
+def make_send_kwargs(args: argparse.Namespace) -> dict:
+    cert = None
+    if args.cert:
+        cert = args.cert
+        if args.cert_key:
+            cert = args.cert, args.cert_key
+
+    return {
+        'timeout': args.timeout or None,
+        'allow_redirects': False,
+        'proxies': {p.key: p.value for p in args.proxy},
+        'stream': True,
+        'verify': {
+            'yes': True,
+            'true': True,
+            'no': False,
+            'false': False,
+        }.get(args.verify.lower(), args.verify),
+        'cert': cert,
+    }
+
+
+def prepare_sessions(
     args: argparse.Namespace,
     config_dir: Path,
-) -> Iterable[Union[requests.PreparedRequest, requests.Response]]:
-    httpie_session = None
+) -> Tuple[dict, dict, Session, requests.Session]:
+    """Loads or creates HTTPie Session object
+    Overrides session file configurations with command line args
+    Prepares keyword arguments
+    Creates a requests RequestSession object
+
+    Args:
+        args (argparse.Namespace): Command line arguments
+        config_dir (Path): Path to find or create Session file
+
+    Returns:
+        Tuple[dict, dict, Session, requests.Session]: Keyword arguments and Session objects
+    """
+
+    httpie_session = get_httpie_session(
+        config_dir=config_dir,
+        session_name=args.session or args.session_read_only,
+        host=args.headers.get('Host'),
+        url=args.url,
+    )
+
     httpie_session_headers = None
-    if args.session or args.session_read_only:
-        httpie_session = get_httpie_session(
-            config_dir=config_dir,
-            session_name=args.session or args.session_read_only,
-            host=args.headers.get('Host'),
-            url=args.url,
-        )
+    if httpie_session:
         httpie_session_headers = httpie_session.headers
 
     request_kwargs = make_request_kwargs(
         args=args,
         base_headers=httpie_session_headers,
     )
+
     send_kwargs = make_send_kwargs(args)
-    send_kwargs_mergeable_from_env = make_send_kwargs_mergeable_from_env(args)
+
     requests_session = build_requests_session(
         ssl_version=args.ssl_version,
         ciphers=args.ciphers,
-        verify=bool(send_kwargs_mergeable_from_env['verify'])
+        verify=bool(send_kwargs['verify'])
     )
 
     if httpie_session:
-        httpie_session.update_headers(request_kwargs['headers'])
-        requests_session.cookies = httpie_session.cookies
-        if args.auth_plugin:
-            # Save auth from CLI to HTTPie session.
-            httpie_session.auth = {
-                'type': args.auth_plugin.auth_type,
-                'raw_auth': args.auth_plugin.raw_auth,
-            }
-        elif httpie_session.auth:
+        httpie_session.update_auth(args.auth_plugin)
+        if httpie_session.auth:
             # Apply auth from HTTPie session
             request_kwargs['auth'] = httpie_session.auth
+        httpie_session.update_headers(request_kwargs['headers'])
+        requests_session.cookies = httpie_session.cookies
 
-    if args.debug:
-        # TODO: reflect the split between request and send kwargs.
-        dump_request(request_kwargs)
+    return request_kwargs, send_kwargs, httpie_session, requests_session
+
+
+def create_prepared_request(
+    args: argparse.Namespace,
+    requests_session: requests.Session,
+    request_kwargs: dict
+) -> requests.PreparedRequest:
+    """Creates a PreparedRequest object
+    Leaves relative path as input if `path_as_is` specified in args
+    Compresses request body if `compress` specified in args
+
+    Args:
+        args (argparse.Namespace): Command line arguments
+        requests_session (requests.Session): Preprepared requests.Session object
+        request_kwargs (dict): Prepared keyword arguments for request
+
+    Returns:
+        requests.PreparedRequest: Created PreparedRequest object
+    """
 
     request = requests.Request(**request_kwargs)
     prepared_request = requests_session.prepare_request(request)
+
     if args.path_as_is:
         prepared_request.url = ensure_path_as_is(
             orig_url=args.url,
@@ -80,47 +129,82 @@ def collect_messages(
         )
     if args.compress and prepared_request.body:
         compress_body(prepared_request, always=args.compress > 1)
-    response_count = 0
+
+    return prepared_request
+
+
+def collect_messages(
+    args: argparse.Namespace,
+    config_dir: Path,
+) -> Iterable[Union[requests.PreparedRequest, requests.Response]]:
+    """
+    Prepares request, sends it and follows redirects if specified
+    Uses and updates the session file if specified
+
+    Arguments:
+        - args: arguments from CLI
+        - config_dir: directory for the session files
+
+    Returns: yields requests and responses
+    """
+
+    request_kwargs, send_kwargs, httpie_session, requests_session\
+        = prepare_sessions(args, config_dir)
+
+    if args.debug:
+        # TODO: reflect the split between request and send kwargs.
+        dump_request(request_kwargs)
+
+    prepared_request = create_prepared_request(args, requests_session, request_kwargs)
+
     expired_cookies = []
-    while prepared_request:
+    for response_count in range(1, args.max_redirects + 1):
         yield prepared_request
-        if not args.offline:
-            send_kwargs_merged = requests_session.merge_environment_settings(
-                url=prepared_request.url,
-                **send_kwargs_mergeable_from_env,
-            )
-            with max_headers(args.max_headers):
-                response = requests_session.send(
-                    request=prepared_request,
-                    **send_kwargs_merged,
-                    **send_kwargs,
-                )
+        if args.offline:
+            break
 
-            # noinspection PyProtectedMember
-            expired_cookies += get_expired_cookies(
-                headers=response.raw._original_response.msg._headers
+        send_kwargs_merged = requests_session.merge_environment_settings(
+            prepared_request.url,
+            send_kwargs['proxies'],
+            send_kwargs['stream'],
+            send_kwargs['verify'],
+            send_kwargs['cert'],
+        )
+        with max_headers(args.max_headers):
+            response = requests_session.send(
+                timeout=send_kwargs['timeout'],
+                allow_redirects=send_kwargs['allow_redirects'],
+                **send_kwargs_merged,
+                request=prepared_request,
             )
 
-            response_count += 1
-            if response.next:
-                if args.max_redirects and response_count == args.max_redirects:
-                    raise requests.TooManyRedirects
-                if args.follow:
-                    prepared_request = response.next
-                    if args.all:
-                        yield response
-                    continue
+        # noinspection PyProtectedMember
+        expired_cookies += get_expired_cookies(
+            headers=response.raw._original_response.msg._headers
+        )
+
+        if not response.next or not args.follow:
             yield response
-        break
+            break
+
+        prepared_request = follow_redirect(args, response_count, response)
+        if not args.all:
+            continue
+        yield response
 
     if httpie_session:
         if httpie_session.is_new() or not args.session_read_only:
-            httpie_session.cookies = requests_session.cookies
-            httpie_session.remove_cookies(
-                # TODO: take path & domain into account?
-                cookie['name'] for cookie in expired_cookies
-            )
-            httpie_session.save()
+            httpie_session.update_cookies(requests_session.cookies, expired_cookies)
+
+
+def follow_redirect(
+    args: argparse.Namespace,
+    response_count: int,
+    response: requests.Response
+) -> requests.Response:
+    if args.max_redirects and response_count == (args.max_redirects):
+        raise requests.TooManyRedirects
+    return response.next
 
 
 # noinspection PyProtectedMember
@@ -218,34 +302,6 @@ def make_default_headers(args: argparse.Namespace) -> RequestHeadersDict:
         # the `Content-Type` for us.
         default_headers['Content-Type'] = FORM_CONTENT_TYPE
     return default_headers
-
-
-def make_send_kwargs(args: argparse.Namespace) -> dict:
-    kwargs = {
-        'timeout': args.timeout or None,
-        'allow_redirects': False,
-    }
-    return kwargs
-
-
-def make_send_kwargs_mergeable_from_env(args: argparse.Namespace) -> dict:
-    cert = None
-    if args.cert:
-        cert = args.cert
-        if args.cert_key:
-            cert = cert, args.cert_key
-    kwargs = {
-        'proxies': {p.key: p.value for p in args.proxy},
-        'stream': True,
-        'verify': {
-            'yes': True,
-            'true': True,
-            'no': False,
-            'false': False,
-        }.get(args.verify.lower(), args.verify),
-        'cert': cert,
-    }
-    return kwargs
 
 
 def make_request_kwargs(

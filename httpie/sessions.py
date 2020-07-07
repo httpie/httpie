@@ -7,7 +7,7 @@ import re
 
 from http.cookies import SimpleCookie
 from pathlib import Path
-from typing import Iterable, Optional, Union
+from typing import Iterable, List, Optional, Union
 from urllib.parse import urlsplit
 
 from requests.auth import AuthBase
@@ -16,6 +16,7 @@ from requests.cookies import RequestsCookieJar, create_cookie
 from httpie.cli.dicts import RequestHeadersDict
 from httpie.config import BaseConfigDict, DEFAULT_CONFIG_DIR
 from httpie.plugins.registry import plugin_manager
+from httpie.plugins.base import AuthPlugin
 
 
 SESSIONS_DIR_NAME = 'sessions'
@@ -27,25 +28,46 @@ VALID_SESSION_NAME_PATTERN = re.compile('^[a-zA-Z0-9_.-]+$')
 SESSION_IGNORED_HEADER_PREFIXES = ['Content-', 'If-']
 
 
-def get_httpie_session(
+def create_new_session_path(
     config_dir: Path,
     session_name: str,
     host: Optional[str],
     url: str,
-) -> 'Session':
+) -> str:
+    hostname = host or urlsplit(url).netloc.split('@')[-1]
+    if not hostname:
+        # HACK/FIXME: httpie-unixsocket's URLs have no hostname.
+        hostname = 'localhost'
+
+    # host:port => host_port
+    hostname = hostname.replace(':', '_')
+    path = (
+        config_dir / SESSIONS_DIR_NAME / hostname / f'{session_name}.json'
+    )
+    return path
+
+
+def get_httpie_session(
+    config_dir: Path,
+    session_name: Optional[str],
+    host: Optional[str],
+    url: str,
+) -> Optional['Session']:
+    """
+    Loads or creates a new session at config_dir/session_name.json if the session_name is valid.
+
+    Returns:
+        None: when session_name is none
+        Session: when session_name exists
+    """
+    if not session_name:
+        return None
+
     if os.path.sep in session_name:
         path = os.path.expanduser(session_name)
     else:
-        hostname = host or urlsplit(url).netloc.split('@')[-1]
-        if not hostname:
-            # HACK/FIXME: httpie-unixsocket's URLs have no hostname.
-            hostname = 'localhost'
+        path = create_new_session_path(config_dir, session_name, host, url)
 
-        # host:port => host_port
-        hostname = hostname.replace(':', '_')
-        path = (
-            config_dir / SESSIONS_DIR_NAME / hostname / f'{session_name}.json'
-        )
     session = Session(path)
     session.load()
     return session
@@ -98,6 +120,14 @@ class Session(BaseConfigDict):
     @property
     def headers(self) -> RequestHeadersDict:
         return RequestHeadersDict(self['headers'])
+
+    def update_cookies(self, new_cookies: RequestsCookieJar, expired_cookies: List[str]):
+        self.cookies = new_cookies
+        self.remove_cookies(
+            # TODO: take path & domain into account?
+            cookie['name'] for cookie in expired_cookies
+        )
+        self.save()
 
     @property
     def cookies(self) -> RequestsCookieJar:
@@ -152,6 +182,16 @@ class Session(BaseConfigDict):
     def auth(self, auth: dict):
         assert {'type', 'raw_auth'} == auth.keys()
         self['auth'] = auth
+
+    def update_auth(self, auth_plugin: AuthPlugin):
+        """Update the session auth with the auth_plugin arguments
+        """
+        if auth_plugin:
+            # Save auth from CLI to HTTPie session.
+            self.auth = {
+                'type': auth_plugin.auth_type,
+                'raw_auth': auth_plugin.raw_auth,
+            }
 
     def remove_cookies(self, names: Iterable[str]):
         for name in names:
