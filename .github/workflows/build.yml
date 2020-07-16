@@ -24,6 +24,7 @@ jobs:
       matrix:
         os: [ubuntu-latest, macOS-latest, windows-latest]
         python-version: [3.6, 3.7, 3.8]
+        pyopenssl: ["0", "1"]
         exclude:
           - os: windows-latest
             python-version: 3.8
@@ -35,3 +36,5 @@ jobs:
       - run: pip install --upgrade pip setuptools wheel
       - run: pip install --upgrade --editable .
       - run: python setup.py test
+        env:
+          HTTPIE_TEST_WITH_PYOPENSSL: ${{ matrix.pyopenssl }}
