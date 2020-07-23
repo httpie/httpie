@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+# PYTHON_ARGCOMPLETE_OK
 """The main entry point. Invoke as `http' or `python -m httpie'.
 
 """

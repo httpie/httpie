@@ -1966,6 +1966,17 @@ HTTPie reaches its final version ``1.0``. All changes are recorded in the
 `change log`_.
 
 
+Shell completion
+----------------
+
+Shell completion is provided using the argcomplete library. It is suggested
+to load the completion without falling back to the shell defaults in order
+to avoid default completions in contexts where they do not apply. For example
+for bash:
+
+.. code-block:: bash
+
+    $ eval "$(register-python-argcomplete --no-defaults http)"
 
 User support
 ------------
@@ -1989,12 +2000,14 @@ Related projects
 Dependencies
 ~~~~~~~~~~~~
 
-Under the hood, HTTPie uses these two amazing libraries:
+Under the hood, HTTPie uses these three amazing libraries:
 
 * `Requests <https://python-requests.org>`_
   — Python HTTP library for humans
 * `Pygments <https://pygments.org/>`_
   — Python syntax highlighter
+* `argcomplete <https://github.com/kislyuk/argcomplete>`_
+  — Shell completion generator
 
 
 HTTPie friends
