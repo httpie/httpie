@@ -3,11 +3,9 @@ import os
 import platform
 import sys
 from typing import List, Union
-
 import requests
 from pygments import __version__ as pygments_version
 from requests import __version__ as requests_version
-
 from httpie import __version__ as httpie_version
 from httpie.client import collect_messages
 from httpie.context import Environment
@@ -15,6 +13,7 @@ from httpie.downloads import Downloader
 from httpie.output.writer import write_message, write_stream
 from httpie.plugins.registry import plugin_manager
 from httpie.status import ExitStatus, http_status_to_exit_status
+from httpie.cli.errors import ConnectionError as write_connection_error
 
 
 # noinspection PyDefaultArgument
@@ -99,11 +98,22 @@ def main(
             if hasattr(e, 'request'):
                 request = e.request
                 if hasattr(request, 'url'):
-                    msg = (
-                        f'{msg} while doing a {request.method}'
-                        f' request to URL: {request.url}'
-                    )
-            env.log_error(f'{type(e).__name__}: {msg}')
+                    if type(e) is requests.ConnectionError:
+                        details = e.args[0]
+                        url = request.url
+                        method = request.method
+                        error_type = e.__doc__
+                        connection_error = write_connection_error(details, url, method, error_type)
+                        error = connection_error.__str__()
+                        env.log_error(
+                            f'{error}'
+                        )
+                    else:
+                        msg = (
+                            f'{msg} while doing a {request.method}'
+                            f' request to URL: {request.url}'
+                        )
+                        env.log_error(f'{type(e).__name__}: {msg}')
             if include_traceback:
                 raise
             exit_status = ExitStatus.ERROR
