@@ -5,22 +5,19 @@ Download mode implementation.
 """
 from __future__ import division
 
-import errno
-import mimetypes
 import os
 import re
 import sys
-import threading
-from mailbox import Message
-from time import sleep, time
-from typing import IO, Optional, Tuple
-from urllib.parse import urlsplit
-
 import requests
+import threading
+from time import sleep, time
+from typing import IO, Tuple
 
 from httpie.models import HTTPResponse
 from httpie.output.streams import RawStream
-from httpie.utils import humanize_bytes
+from httpie.utils import (
+    humanize_bytes, get_unique_filename, get_initial_filename
+)
 
 
 PARTIAL_CONTENT = 206
@@ -100,96 +97,11 @@ def parse_content_range(content_range: str, resumed_from: int) -> int:
     return last_byte_pos + 1
 
 
-def filename_from_content_disposition(
-    content_disposition: str
-) -> Optional[str]:
-    """
-    Extract and validate filename from a Content-Disposition header.
-
-    :param content_disposition: Content-Disposition value
-    :return: the filename if present and valid, otherwise `None`
-
-    """
-    # attachment; filename=jakubroztocil-httpie-0.4.1-20-g40bd8f6.tar.gz
-
-    msg = Message('Content-Disposition: %s' % content_disposition)
-    filename = msg.get_filename()
-    if filename:
-        # Basic sanitation.
-        filename = os.path.basename(filename).lstrip('.').strip()
-        if filename:
-            return filename
-
-
-def filename_from_url(url: str, content_type: Optional[str]) -> str:
-    fn = urlsplit(url).path.rstrip('/')
-    fn = os.path.basename(fn) if fn else 'index'
-    if '.' not in fn and content_type:
-        content_type = content_type.split(';')[0]
-        if content_type == 'text/plain':
-            # mimetypes returns '.ksh'
-            ext = '.txt'
-        else:
-            ext = mimetypes.guess_extension(content_type)
-
-        if ext == '.htm':  # Python 3
-            ext = '.html'
-
-        if ext:
-            fn += ext
-
-    return fn
-
-
-def trim_filename(filename: str, max_len: int) -> str:
-    if len(filename) > max_len:
-        trim_by = len(filename) - max_len
-        name, ext = os.path.splitext(filename)
-        if trim_by >= len(name):
-            filename = filename[:-trim_by]
-        else:
-            filename = name[:-trim_by] + ext
-    return filename
-
-
-def get_filename_max_length(directory: str) -> int:
-    max_len = 255
-    try:
-        pathconf = os.pathconf
-    except AttributeError:
-        pass  # non-posix
-    else:
-        try:
-            max_len = pathconf(directory, 'PC_NAME_MAX')
-        except OSError as e:
-            if e.errno != errno.EINVAL:
-                raise
-    return max_len
-
-
-def trim_filename_if_needed(filename: str, directory='.', extra=0) -> str:
-    max_len = get_filename_max_length(directory) - extra
-    if len(filename) > max_len:
-        filename = trim_filename(filename, max_len)
-    return filename
-
-
-def get_unique_filename(filename: str, exists=os.path.exists) -> str:
-    attempt = 0
-    while True:
-        suffix = '-' + str(attempt) if attempt > 0 else ''
-        try_filename = trim_filename_if_needed(filename, extra=len(suffix))
-        try_filename += suffix
-        if not exists(try_filename):
-            return try_filename
-        attempt += 1
-
-
 class Downloader:
 
     def __init__(
         self,
-        output_file: IO = None,
+        output_file: IO,
         resume: bool = False,
         progress_file: IO = sys.stderr
     ):
@@ -197,8 +109,9 @@ class Downloader:
         :param resume: Should the download resume if partial download
                        already exists.
 
-        :param output_file: The file to store response body in. If not
-                            provided, it will be guessed from the response.
+        :param output_dest: The file or dir to store response body in. If not
+                            provided, file name will be guessed
+                            from the response.
 
         :param progress_file: Where to report download progress.
 
@@ -206,6 +119,7 @@ class Downloader:
         self.finished = False
         self.status = DownloadStatus()
         self._output_file = output_file
+
         self._resume = resume
         self._resumed_from = 0
         self._progress_reporter = ProgressReporterThread(
@@ -213,7 +127,7 @@ class Downloader:
             output=progress_file
         )
 
-    def pre_request(self, request_headers: dict):
+    def pre_request(self, url: str, request_headers: dict):
         """Called just before the HTTP request is sent.
 
         Might alter `request_headers`.
@@ -254,18 +168,19 @@ class Downloader:
             total_size = None
 
         if not self._output_file:
-            self._output_file = self._get_output_file_from_response(
-                initial_url=initial_url,
-                final_response=final_response,
+            # create download output file
+            self.output_filename = get_initial_filename(initial_url)
+            self._output_file = open(
+                get_unique_filename(self.output_filename), "a+b"
             )
+
         else:
-            # `--output, -o` provided
+            # output file provided
             if self._resume and final_response.status_code == PARTIAL_CONTENT:
                 total_size = parse_content_range(
                     final_response.headers.get('Content-Range'),
                     self._resumed_from
                 )
-
             else:
                 self._resumed_from = 0
                 try:
@@ -324,24 +239,6 @@ class Downloader:
 
         """
         self.status.chunk_downloaded(len(chunk))
-
-    @staticmethod
-    def _get_output_file_from_response(
-        initial_url: str,
-        final_response: requests.Response,
-    ) -> IO:
-        # Output file not specified. Pick a name that doesn't exist yet.
-        filename = None
-        if 'Content-Disposition' in final_response.headers:
-            filename = filename_from_content_disposition(
-                final_response.headers['Content-Disposition'])
-        if not filename:
-            filename = filename_from_url(
-                url=initial_url,
-                content_type=final_response.headers.get('Content-Type'),
-            )
-        unique_filename = get_unique_filename(filename)
-        return open(unique_filename, mode='a+b')
 
 
 class DownloadStatus:

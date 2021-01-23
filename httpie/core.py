@@ -149,11 +149,11 @@ def program(
         if args.download:
             args.follow = True  # --download implies --follow.
             downloader = Downloader(
-                output_file=args.output_file,
+                output_file=args.output_dest,
                 progress_file=env.stderr,
                 resume=args.download_resume
             )
-            downloader.pre_request(args.headers)
+            downloader.pre_request(args.url, args.headers)
 
         needs_separator = False
 
@@ -254,9 +254,9 @@ def program(
         if downloader and not downloader.finished:
             downloader.failed()
 
-        if (not isinstance(args, list) and args.output_file
-                and args.output_file_specified):
-            args.output_file.close()
+        if (not isinstance(args, list) and args.output_dest
+                and args.output_dest_specified):
+            args.output_dest.close()
 
 
 def print_debug_info(env: Environment):

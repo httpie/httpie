@@ -25,7 +25,10 @@ from httpie.cli.exceptions import ParseError
 from httpie.cli.requestitems import RequestItems
 from httpie.context import Environment
 from httpie.plugins.registry import plugin_manager
-from httpie.utils import ExplicitNullAuth, get_content_type
+from httpie.utils import (
+    ExplicitNullAuth, get_content_type, get_initial_filename,
+    get_unique_filename
+)
 
 
 class HTTPieHelpFormatter(RawDescriptionHelpFormatter):
@@ -63,6 +66,7 @@ class HTTPieArgumentParser(argparse.ArgumentParser):
         super().__init__(*args, formatter_class=formatter_class, **kwargs)
         self.env = None
         self.args = None
+        self.output_file = None
         self.has_stdin_data = False
 
     # noinspection PyMethodOverriding
@@ -145,18 +149,43 @@ class HTTPieArgumentParser(argparse.ArgumentParser):
             message = message.encode(self.env.stdout_encoding)
         super()._print_message(message, file)
 
+    @property
+    def _output_file(self):
+        return self.output_file
+
     def _setup_standard_streams(self):
         """
         Modify `env.stdout` and `env.stdout_isatty` based on args, if needed.
 
         """
+        self.output_file = False
+        self.args.output_dest_specified = bool(self.args.output_dest)
+        if self.args.output_dest_specified:
+            if not os.path.isdir(self.args.output_dest):
+                try:
+                    # directly open the output file provided
+                    self.output_file = open(self.args.output_dest, 'a+b')
+                except IsADirectoryError:
+                    self.error('The specified directory does not exist')
+            else:
+                # directory passed as output destination
+                self.output_filename = get_initial_filename(self.args.url)
+                if not self.args.download_resume:
+                    self.output_file_path = get_unique_filename(
+                        os.path.join(self.args.output_dest,
+                                     self.output_filename)
+                    )
+                else:
+                    self.output_file_path = os.path.join(
+                        self.args.output_dest, self.output_filename
+                    )
+                self.output_file = open(self.output_file_path, 'a+b')
 
-        self.args.output_file_specified = bool(self.args.output_file)
         if self.args.download:
             # FIXME: Come up with a cleaner solution.
-            if not self.args.output_file and not self.env.stdout_isatty:
+            if not self.args.output_dest and not self.env.stdout_isatty:
                 # Use stdout as the download output file.
-                self.args.output_file = self.env.stdout
+                self.output_file = self.env.stdout
             # With `--download`, we write everything that would normally go to
             # `stdout` to `stderr` instead. Let's replace the stream so that
             # we don't have to use many `if`s throughout the codebase.
@@ -164,25 +193,28 @@ class HTTPieArgumentParser(argparse.ArgumentParser):
             self.env.stdout = self.env.stderr
             self.env.stdout_isatty = self.env.stderr_isatty
 
-        elif self.args.output_file:
+        elif self.args.output_dest_specified:
             # When not `--download`ing, then `--output` simply replaces
             # `stdout`. The file is opened for appending, which isn't what
             # we want in this case.
-            self.args.output_file.seek(0)
+            self.output_file.seek(0)
             try:
-                self.args.output_file.truncate()
+                self.output_file.truncate()
             except IOError as e:
                 if e.errno == errno.EINVAL:
                     # E.g. /dev/null on Linux.
                     pass
                 else:
                     raise
-            self.env.stdout = self.args.output_file
+            self.env.stdout = self.output_file
             self.env.stdout_isatty = False
+
+        self.args.output_dest = self._output_file
 
         if self.args.quiet:
             self.env.stderr = self.env.devnull
-            if not (self.args.output_file_specified and not self.args.download):
+            if not (self.args.output_dest_specified
+                    and not self.args.download):
                 self.env.stdout = self.env.devnull
 
     def _process_auth(self):
@@ -419,7 +451,7 @@ class HTTPieArgumentParser(argparse.ArgumentParser):
             self.args.prettify = PRETTY_MAP[
                 'all' if self.env.stdout_isatty else 'none']
         elif (self.args.prettify and self.env.is_windows
-              and self.args.output_file):
+              and self.args.output_dest):
             self.error('Only terminal output can be colorized on Windows.')
         else:
             # noinspection PyTypeChecker
@@ -434,11 +466,13 @@ class HTTPieArgumentParser(argparse.ArgumentParser):
             if self.args.download_resume:
                 self.error('--continue only works with --download')
         if self.args.download_resume and not (
-                self.args.download and self.args.output_file):
+                self.args.download and self.args.output_dest):
             self.error('--continue requires --output to be specified')
 
     def _process_format_options(self):
         parsed_options = PARSED_DEFAULT_FORMAT_OPTIONS
         for options_group in self.args.format_options or []:
-            parsed_options = parse_format_options(options_group, defaults=parsed_options)
+            parsed_options = parse_format_options(
+                options_group, defaults=parsed_options
+            )
         self.args.format_options = parsed_options
