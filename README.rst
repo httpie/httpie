@@ -108,6 +108,9 @@ system package manager, for example:
 
     # CentOS, RHEL, ...
     $ yum install httpie
+    
+    # Pacman-based distributions:
+    $ pacman -S httpie
 
 .. code-block:: bash
 
