@@ -17,6 +17,8 @@ from .output.writer import write_message, write_stream, MESSAGE_SEPARATOR_BYTES
 from .plugins.registry import plugin_manager
 from .status import ExitStatus, http_status_to_exit_status
 
+from httpie.history import EntryNotFound, get_history
+
 
 # noinspection PyDefaultArgument
 def main(args: List[Union[str, bytes]] = sys.argv, env=Environment()) -> ExitStatus:
@@ -54,6 +56,18 @@ def main(args: List[Union[str, bytes]] = sys.argv, env=Environment()) -> ExitSta
             args=args,
             env=env,
         )
+        env.history_enabled = True
+        if parsed_args.history is not None:
+            if parsed_args.history == 0:
+                print_history(env, parsed_args)
+                return ExitStatus.SUCCESS
+            else:
+                history = get_history(env.config.directory, host=parsed_args.headers.get('Host'), url=parsed_args.url)
+                args = history.get_entry(parsed_args.history).get_args()
+                env.history_enabled = False
+                main(args, env)
+                return ExitStatus.SUCCESS
+
     except KeyboardInterrupt:
         env.stderr.write('\n')
         if include_traceback:
@@ -65,12 +79,18 @@ def main(args: List[Union[str, bytes]] = sys.argv, env=Environment()) -> ExitSta
             if include_traceback:
                 raise
             exit_status = ExitStatus.ERROR
+    except EntryNotFound:
+        if include_traceback:
+            raise
+        env.log_error('Entry not found.')
+        exit_status = ExitStatus.ERROR
     else:
         try:
             exit_status = program(
                 args=parsed_args,
                 env=env,
             )
+
         except KeyboardInterrupt:
             env.stderr.write('\n')
             if include_traceback:
@@ -209,6 +229,12 @@ def program(args: argparse.Namespace, env: Environment) -> ExitStatus:
                         downloader.status.total_size,
                         downloader.status.downloaded
                     ))
+
+        if args.history is None and env.history_enabled:
+            history = get_history(config_dir=env.config.directory, host=args.headers.get('Host'), url=args.url)
+            history.add_entry(args=sys.argv)
+            history.save()
+
         return exit_status
 
     finally:
@@ -245,3 +271,8 @@ def decode_raw_args(
         if type(arg) is bytes else arg
         for arg in args
     ]
+
+
+def print_history(env, args):
+    history = get_history(config_dir=env.config.directory, host=args.headers.get('Host'), url=args.url)
+    env.stderr.write(history.get_history_str(10))
