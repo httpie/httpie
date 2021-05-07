@@ -49,6 +49,7 @@ This project adheres to `Semantic Versioning <https://semver.org/>`_.
 * Added ``netrc`` support for auth plugins. Enabled for ``--auth-type=basic``
   and ``digest``, 3rd parties may opt in (`#718`_, `#719`_, `#852`_, `#934`_).
 * Fixed built-in plugins-related circular imports (`#925`_).
+* Fixed cookie not updated during redirect by saving domain for cookies (`#662`).
 
 
 `2.1.0`_ (2020-04-18)
