@@ -35,6 +35,7 @@ This project adheres to `Semantic Versioning <https://semver.org/>`_.
 * Added ``--quiet, -q`` flag to enforce silent behaviour.
 * Fixed the handling of invalid ``expires`` dates in ``Set-Cookie`` headers (`#963`_).
 * Removed Tox testing entirely (`#943`_).
+* Provide password via environment variable ``HTTPIE_PASSWORD``
 
 
 `2.2.0`_ (2020-06-18)
