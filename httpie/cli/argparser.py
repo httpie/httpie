@@ -304,7 +304,7 @@ class HTTPieArgumentParser(argparse.ArgumentParser):
 
         """
         if self.args.data or self.args.files:
-            self.error('Request body and request data (key=value) '
+            self.error('Request body and request data (key=value)'
                        ' cannot be mixed.'
                        'See https://httpie.org/doc#scripting for details.')
         self.args.data = data.encode('utf-8')
