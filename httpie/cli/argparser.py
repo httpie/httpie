@@ -63,7 +63,7 @@ class HTTPieArgumentParser(argparse.ArgumentParser):
         super().__init__(*args, formatter_class=formatter_class, **kwargs)
         self.env = None
         self.args = None
-        self.has_stdin_data = False
+        self.has_input_data = False
 
     # noinspection PyMethodOverriding
     def parse_args(
@@ -76,11 +76,12 @@ class HTTPieArgumentParser(argparse.ArgumentParser):
         self.args, no_options = super().parse_known_args(args, namespace)
         if self.args.debug:
             self.args.traceback = True
-        self.has_stdin_data = (
+        has_stdin_data = (
             self.env.stdin
             and not self.args.ignore_stdin
             and not self.env.stdin_isatty
         )
+        self.has_input_data = has_stdin_data or bool(self.args.request)
         # Arguments processing and environment setup.
         self._apply_no_options(no_options)
         self._process_request_type()
@@ -91,10 +92,13 @@ class HTTPieArgumentParser(argparse.ArgumentParser):
         self._process_format_options()
         self._guess_method()
         self._parse_items()
-        if self.has_stdin_data:
-            self._body_from_file(self.env.stdin)
         self._process_url()
         self._process_auth()
+
+        if self.args.request:
+            self._body_from_input(self.args.request)
+        elif has_stdin_data:
+            self._body_from_file(self.env.stdin)
 
         if self.args.compress:
             # TODO: allow --compress with --chunked / --multipart
@@ -295,6 +299,16 @@ class HTTPieArgumentParser(argparse.ArgumentParser):
                        'See https://httpie.org/doc#scripting for details.')
         self.args.data = getattr(fd, 'buffer', fd)
 
+    def _body_from_input(self, data):
+        """There can only be one source of input request data.
+
+        """
+        if self.args.data or self.args.files:
+            self.error('Request body and request data (key=value) '
+                       ' cannot be mixed.'
+                       'See https://httpie.org/doc#scripting for details.')
+        self.args.data = data.encode('utf-8')
+
     def _guess_method(self):
         """Set `args.method` if not specified to either POST or GET
         based on whether the request has data or not.
@@ -303,7 +317,7 @@ class HTTPieArgumentParser(argparse.ArgumentParser):
         if self.args.method is None:
             # Invoked as `http URL'.
             assert not self.args.request_items
-            if self.has_stdin_data:
+            if self.has_input_data:
                 self.args.method = HTTP_POST
             else:
                 self.args.method = HTTP_GET
@@ -327,7 +341,7 @@ class HTTPieArgumentParser(argparse.ArgumentParser):
                 self.args.url = self.args.method
                 # Infer the method
                 has_data = (
-                    self.has_stdin_data
+                    self.has_input_data
                     or any(
                         item.sep in SEPARATOR_GROUP_DATA_ITEMS
                         for item in self.args.request_items)

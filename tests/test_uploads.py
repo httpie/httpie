@@ -271,6 +271,19 @@ class TestRequestBodyFromFilePath:
         assert r.exit_status == ExitStatus.ERROR
         assert 'cannot be mixed' in r.stderr
 
+    def test_request_body_request_no_data_items_allowed(
+            self, httpbin):
+        r = http(
+            '--request',
+            'foo bar',
+            'POST',
+            httpbin.url + '/post',
+            'foo=bar',
+            tolerate_error_exit_status=True,
+        )
+        assert r.exit_status == ExitStatus.ERROR
+        assert 'cannot be mixed' in r.stderr
+
     def test_multiple_request_bodies_from_file_by_path(self, httpbin):
         env = MockEnvironment(stdin_isatty=True)
         r = http(

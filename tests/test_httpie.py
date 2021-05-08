@@ -103,6 +103,12 @@ def test_POST_form_multiple_values(httpbin_both):
     }
 
 
+def test_POST_request(httpbin_both):
+    r = http('--request', 'foo bar', 'POST', httpbin_both + '/post')
+    assert HTTP_OK in r
+    assert '"foo bar"' in r
+
+
 def test_POST_stdin(httpbin_both):
     env = MockEnvironment(
         stdin=StdinBytesIO(FILE_PATH.read_bytes()),
