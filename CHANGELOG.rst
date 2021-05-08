@@ -10,6 +10,7 @@ This project adheres to `Semantic Versioning <https://semver.org/>`_.
 `2.5.0-dev`_ (unreleased)
 -------------------------
 * Fixed ``--continue --download`` with a single byte to be downloaded left. (`#1032`_)
+* Added ``--request, -r`` to allow specifying the raw request body without extra processing whatsoever. (`#534`_)
 
 
 `2.4.0`_ (2021-02-06)

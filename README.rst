@@ -635,7 +635,14 @@ Raw and complex JSON
 Please note that with the `request items`_ data field syntax, commands
 can quickly become unwieldy when sending complex structures.
 In such cases, it’s better to pass the full raw JSON data via
-`redirected input`_, for example:
+the ``--request, -r`` argument, for example:
+
+.. code-block:: bash
+
+    $ http -r '{"hello": "world"}' POST pie.dev/post
+
+It is also possible to pass the full raw JSON data via `redirected input`_,
+for example:
 
 .. code-block:: bash
 
@@ -1386,12 +1393,18 @@ You can use ``echo`` for simple data:
 
     $ echo '{"name": "John"}' | http PATCH pie.dev/patch X-API-Token:123
 
+    # Alternative solution
+    $ http -r '{"name": "John"}' PATCH pie.dev/patch X-API-Token:123
+
 
 You can also use a Bash *here string*:
 
 .. code-block:: bash
 
     $ http pie.dev/post <<<'{"name": "John"}'
+
+    # Alternative solution
+    $ http -r '{"name": "John"}' pie.dev/post
 
 
 You can even pipe web services together using HTTPie:
@@ -1428,7 +1441,6 @@ On OS X, you can send the contents of the clipboard with ``pbpaste``:
 Passing data through ``stdin`` cannot be combined with data fields specified
 on the command line:
 
-
 .. code-block:: bash
 
     $ echo 'data' | http POST example.org more=data   # This is invalid
@@ -1436,6 +1448,21 @@ on the command line:
 
 To prevent HTTPie from reading ``stdin`` data you can use the
 ``--ignore-stdin`` option.
+
+
+Another option is to use the ``--request, -r`` argument when possible:
+
+.. code-block:: bash
+
+    $ http -r '{"name": "John"}' pie.dev/post
+
+
+Passing data through ``--redirect, -r`` cannot be combined with data fields
+specified on the command line:
+
+.. code-block:: bash
+
+    $ http -r 'data' POST example.org more=data   # This is invalid
 
 
 Request data from a filename
@@ -2025,6 +2052,8 @@ Best practices
 The default behaviour of automatically reading ``stdin`` is typically not
 desirable during non-interactive invocations. You most likely want to
 use the ``--ignore-stdin`` option to disable it.
+An alternative solution might suit better is to usage of the
+``--request, -r`` argument, which does not suffer from below issues.
 
 It is a common gotcha that without this option HTTPie seemingly hangs.
 What happens is that when HTTPie is invoked for example from a cron job,

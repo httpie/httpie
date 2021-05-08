@@ -185,6 +185,13 @@ content_type.add_argument(
 
     '''
 )
+content_type.add_argument(
+    '--request', '-r',
+    help='''
+    Specify the raw request body without extra processing whatsoever.
+
+    '''
+)
 
 
 #######################################################################
